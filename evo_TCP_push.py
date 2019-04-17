@@ -1,8 +1,8 @@
 #-*- coding: utf8 -*-
 import sys, os
+import asyncio
 import socket
 import struct
-import select
 import time
 import datetime
 import configparser
@@ -93,25 +93,44 @@ def evo_socket():
                 YD_daily_clear()
             recv_data = recv_recursive(recv_data + push_socket.recv(1024),ApexDB_cursor_)
             if len(recv_data) < 1:
-                time.sleep(10)
+                time.sleep(1)
             #20170430 連續收到長度0的資料時中止執行
         except:
             write_log_txt(str(sys.exc_info()))
             break
 def evo_server(server):
-    global order_server_socket
     client, addr = server.accept()
     write_log_txt("Acepted connection from: %s:%d" % (addr[0],addr[1]))
     #print ("Acepted connection from: %s:%d" % (addr[0],addr[1]))
+    hkc_recv_data = b''
     while True:
-        request = client.recv(512)
-        write_log_txt("HKC Received: %s" % request)
-        #print ("Received: %s" % request)
         try:
-            order_server_socket.send(request)
+            hkc_recv_data = hkc_recv_recursive(hkc_recv_data + client.recv(2048))
         except:
-            order_server_socket.close()
-            order_server_socket = build_sock((get_ini_str('order_server','ip'),int(get_ini_str('order_server','port'))))
+            client.close()
+            client, addr = server.accept()
+            write_log_txt("except Acepted connection from: %s:%d" % (addr[0],addr[1]))
+
+def hkc_recv_recursive(recv_data):
+    global order_server_socket
+    #丟進來就要解到沒有結尾符號 才丟出去
+    #write_log_txt('before hkc_recv_recursive ='+str(len(recv_data)))
+    if len(recv_data) > 0:
+        write_log_txt("HKC Received: %s" % recv_data)
+        while True:
+            try:
+                if recv_data.find(b'/>') == -1:#代表這段已經不完整了 下次傳進來再一起解
+                    break
+
+                single_data = recv_data[:recv_data.index(b'/>')+2]#bstr[:13+<SBFORDER ... +2], 用 "/>" 裁切
+                print("send single_data: %s" % str(single_data[13:]))
+                order_server_socket.send(single_data)
+                recv_data = recv_data[recv_data.index(b'/>')+2:]
+            except:
+                order_server_socket.close()
+                order_server_socket = build_sock((get_ini_str('order_server','ip'),int(get_ini_str('order_server','port'))))
+        #write_log_txt('after hkc_recv_recursive ='+str(len(recv_data)))
+    return recv_data
 def recv_recursive(recv_data,ApexDB_cursor_):
     global order_server_socket
     #丟進來就要解到沒有200 165 才丟出去
@@ -155,6 +174,7 @@ def recv_recursive(recv_data,ApexDB_cursor_):
     return recv_data
 
 def tran_future_102(data,DB_cursor):
+    #write_log_txt("tran_future_102 start")
     symb = data[40:60].decode('big5').strip()#symb agsy 商品代碼 char[20]
     bs_ = data[75:76].decode('big5').strip()#買賣別
     kind = '1'
